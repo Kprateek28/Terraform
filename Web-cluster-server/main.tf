@@ -18,11 +18,24 @@ locals {
   project_name = "Web-cluster"
 }
 
+
+
+# VPC Creation
+data "aws_availability_zones" "Avaialble" {}
+
+resource "aws_vpc" "VPC_TF" {
+  cidr_block = "172.31.0.0/16"
+  tags = {
+    Name = "vpc_using_TF"
+  }
+}
+
 # security group using terraform
 resource "aws_security_group" "TF_SG" {
   name        = "SG using terraform"
   description = "security group using terraform"
-  vpc_id      = "vpc-0ba927b9e38633b0c"
+  vpc_id      = aws_vpc.VPC_TF.id
+  
 
   ingress {
     description      = "HTTPS"
@@ -64,26 +77,47 @@ resource "aws_security_group" "TF_SG" {
   }
 }
 
-  
 
-# Create a ec2 instance
-resource "aws_instance" "web-server" {
-  ami                         = "ami-053b0d53c279acc90"
-  instance_type               = "t2.micro"
-  security_groups             = [aws_security_group.TF_SG.name]
-  
-  tags = {
-    Name = "Server-${local.project_name}"
+
+
+# Creating Launch configuration
+resource "aws_launch_configuration" "example" {
+  name          = "web_configuration"
+  image_id      = "ami-053b0d53c279acc90"
+  instance_type = "t2.micro"
+  security_groups            = [aws_security_group.TF_SG.id]
+
+}
+
+# creating AutoScaling group 
+resource "aws_autoscaling_group" "example" {
+  name                 = "TF-asg-example"
+  launch_configuration = aws_launch_configuration.example.name
+  min_size             = 1
+  max_size             = 3
+  vpc_zone_identifier  = [aws_subnet.subnet1.id, aws_subnet.subnet2.id]
+
+  lifecycle {
+    create_before_destroy = true
   }
 }
 
-
-
-
-
-
-
-output "instance_ip_addr" {
-  value = aws_instance.web-server.public_ip
-
+#Subnet Creation
+resource "aws_subnet" "subnet1" {
+  vpc_id            = aws_vpc.VPC_TF.id
+  cidr_block        = "172.31.2.0/24"
+  availability_zone = "us-east-1a"
+  tags = {
+    Name = "subnet1"
+  }
 }
+
+resource "aws_subnet" "subnet2" {
+  vpc_id            = aws_vpc.VPC_TF.id
+  cidr_block        = "172.31.1.0/24"
+  availability_zone = "us-east-1b"
+  tags = {
+    Name = "subnet2"
+  }
+}
+
