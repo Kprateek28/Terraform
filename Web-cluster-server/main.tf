@@ -21,22 +21,14 @@ locals {
 
 
 # VPC Creation
-data "aws_availability_zones" "Avaialble" {}
-
-resource "aws_vpc" "VPC_TF" {
-  cidr_block = "172.31.0.0/16"
-  tags = {
-    Name = "vpc_using_TF"
-  }
+data "aws_vpc" "default" {
+  default = true
 }
 
 # security group using terraform
 resource "aws_security_group" "TF_SG" {
   name        = "SG using terraform"
   description = "security group using terraform"
-  vpc_id      = aws_vpc.VPC_TF.id
-  
-
   ingress {
     description      = "HTTPS"
     from_port        = 443
@@ -82,11 +74,19 @@ resource "aws_security_group" "TF_SG" {
 
 # Creating Launch configuration
 resource "aws_launch_configuration" "example" {
-  name          = "web_configuration"
-  image_id      = "ami-053b0d53c279acc90"
-  instance_type = "t2.micro"
-  security_groups            = [aws_security_group.TF_SG.id]
+  name            = "web_configuration"
+  image_id        = "ami-053b0d53c279acc90"
+  instance_type   = "t2.micro"
+  security_groups = [aws_security_group.TF_SG.id]
 
+}
+
+# create Subnets
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
 }
 
 # creating AutoScaling group 
@@ -95,29 +95,83 @@ resource "aws_autoscaling_group" "example" {
   launch_configuration = aws_launch_configuration.example.name
   min_size             = 1
   max_size             = 3
-  vpc_zone_identifier  = [aws_subnet.subnet1.id, aws_subnet.subnet2.id]
+  vpc_zone_identifier  = data.aws_subnets.default.ids
+  target_group_arns    = [aws_alb_target_group.TF_tg.arn]
 
   lifecycle {
     create_before_destroy = true
   }
 }
 
-#Subnet Creation
-resource "aws_subnet" "subnet1" {
-  vpc_id            = aws_vpc.VPC_TF.id
-  cidr_block        = "172.31.2.0/24"
-  availability_zone = "us-east-1a"
-  tags = {
-    Name = "subnet1"
+
+
+# Application laod balancer
+resource "aws_alb" "TF_example" {
+  name            = "example-alb"
+  subnets         = data.aws_subnets.default.ids
+  security_groups = [aws_security_group.alb_sg.id]
+}
+
+
+# create a listner for the alb
+resource "aws_lb_listener" "TF_http" {
+  load_balancer_arn = aws_alb.TF_example.arn
+  port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    type = "fixed-response"
+
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "404:page not found"
+      status_code  = "404"
+    }
   }
 }
 
-resource "aws_subnet" "subnet2" {
-  vpc_id            = aws_vpc.VPC_TF.id
-  cidr_block        = "172.31.1.0/24"
-  availability_zone = "us-east-1b"
-  tags = {
-    Name = "subnet2"
+
+# create a security group for ALB
+resource "aws_security_group" "alb_sg" {
+  name = "TF-example-alb"
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
+
+# Create a target group
+resource "aws_alb_target_group" "TF_tg" {
+  name     = "TF-example-tg"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = data.aws_vpc.default.id
+}
+
+
+
+# Create a listener rules
+resource "aws_lb_listener_rule" "TF_listnerRules" {
+  listener_arn = aws_lb_listener.TF_http.arn
+  priority    = 100
+
+  condition {
+    path_pattern {
+      values = ["*"]
+    }
+  }
+  action {
+    type             = "forward"
+    target_group_arn = aws_alb_target_group.TF_tg.arn
+  }
+}
